@@ -61,3 +61,76 @@ def flag_util_lies(rows, util_threshold: float = 0.90, mfu_threshold: float = 0.
 def idle_waste_usd(idle_hours: float, on_demand_hr: float) -> float:
     """Dollars burned by a GPU left running idle (training done, instance up)."""
     return max(0.0, idle_hours) * max(0.0, on_demand_hr)
+
+
+def hardware_unit_economics(catalog_rows: list[dict]) -> list[dict]:
+    """Compute unit economic metrics ($/GB VRAM, $/(TB/s) BW, TFLOPs/$) across GPU catalog.
+
+    Essential for right-sizing memory-bound vs compute-bound workloads (FinOps Extension 2).
+    """
+    results = []
+    for row in catalog_rows:
+        od = float(row.get("on_demand_hr", 0.0))
+        vram = float(row.get("hbm_gb", 0.0))
+        bw = float(row.get("peak_bw_tbs", 0.0))
+        tflops = float(row.get("peak_tflops_fp16", 0.0))
+        watts = float(row.get("watts", 0.0))
+
+        cost_per_gb_vram_hr = (od / vram) if vram > 0 else float("inf")
+        cost_per_tbs_bw_hr = (od / bw) if bw > 0 else float("inf")
+        tflops_per_dollar_hr = (tflops / od) if od > 0 else 0.0
+        watts_per_tflop = (watts / tflops) if tflops > 0 else 0.0
+
+        results.append({
+            "gpu_type": row.get("gpu_type"),
+            "on_demand_hr": od,
+            "hbm_gb": vram,
+            "peak_bw_tbs": bw,
+            "peak_tflops_fp16": tflops,
+            "cost_per_gb_vram_hr": round(cost_per_gb_vram_hr, 4),
+            "cost_per_tbs_bw_hr": round(cost_per_tbs_bw_hr, 4),
+            "tflops_per_dollar_hr": round(tflops_per_dollar_hr, 2),
+            "watts_per_tflop": round(watts_per_tflop, 4),
+        })
+    return results
+
+
+def recommend_rightsize_mbu(
+    current_gpu: str,
+    achieved_bw_tbs: float,
+    vram_needed_gb: float,
+    catalog_by_type: dict,
+) -> dict:
+    """Recommend a cheaper GPU replacement if current GPU is over-provisioned for memory bandwidth.
+
+    Finds the cheapest GPU in catalog that satisfies:
+      1. peak_bw_tbs >= achieved_bw_tbs * 1.15 (15% headroom)
+      2. hbm_gb >= vram_needed_gb
+    """
+    cur_info = catalog_by_type.get(current_gpu)
+    if not cur_info:
+        return {"recommended_gpu": current_gpu, "savings_hr": 0.0, "savings_pct": 0.0}
+
+    cur_price = float(cur_info["on_demand_hr"])
+    best_gpu = current_gpu
+    best_price = cur_price
+
+    for gtype, info in catalog_by_type.items():
+        price = float(info["on_demand_hr"])
+        bw = float(info["peak_bw_tbs"])
+        vram = float(info["hbm_gb"])
+
+        if price < best_price and bw >= achieved_bw_tbs * 1.15 and vram >= vram_needed_gb:
+            best_gpu = gtype
+            best_price = price
+
+    savings_hr = cur_price - best_price
+    savings_pct = (savings_hr / cur_price * 100.0) if cur_price > 0 else 0.0
+    return {
+        "current_gpu": current_gpu,
+        "recommended_gpu": best_gpu,
+        "current_price_hr": cur_price,
+        "recommended_price_hr": best_price,
+        "savings_hr": round(savings_hr, 3),
+        "savings_pct": round(savings_pct, 1),
+    }
