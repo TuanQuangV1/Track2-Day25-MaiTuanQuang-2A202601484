@@ -52,10 +52,31 @@ def run(verbose: bool = True) -> dict:
         "best_region": min(sustainability.REGION_CARBON, key=sustainability.REGION_CARBON.get),
     }
 
-    md = report.build_report(baseline, optimized, levers, sustainability=sust)
+    unit_econ = {
+        "baseline_per_m": r2.get("baseline_per_m", 0.0),
+        "optimized_per_m": r2.get("optimized_per_m", 0.0),
+        "token_cost_drop_pct": (1.0 - r2.get("optimized_per_m", 0.0) / r2.get("baseline_per_m", 1.0)) * 100.0 if r2.get("baseline_per_m") else 0.0,
+    }
+
+    ext_info = {
+        "cache": r2.get("extension_cache", {}),
+        "reasoning": r2.get("extension_reasoning", {}),
+        "rightsize": r1.get("rightsize_recommendations", []),
+        "carbon_scheduling": r3.get("extension_carbon_scheduling", {}),
+    }
+
+    md = report.build_report(
+        baseline,
+        optimized,
+        levers,
+        sustainability=sust,
+        unit_economics=unit_econ,
+        gpu_lies_info=r1.get("lies", []),
+        extensions_info=ext_info,
+    )
     out_md = os.path.join(ROOT, "outputs", "report.md")
     os.makedirs(os.path.dirname(out_md), exist_ok=True)
-    with open(out_md, "w") as f:
+    with open(out_md, "w", encoding="utf-8") as f:
         f.write(md)
     png = report.savings_waterfall(levers, os.path.join(ROOT, "outputs", "savings.png"))
 
@@ -70,3 +91,4 @@ def run(verbose: bool = True) -> dict:
 
 if __name__ == "__main__":
     run()
+
