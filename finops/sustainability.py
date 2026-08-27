@@ -45,3 +45,43 @@ def tokens_per_watt(total_tokens: int, wh: float, seconds: float = 1.0) -> float
     """Energy efficiency of serving: tokens per watt (higher is better)."""
     watts = (wh * 3600.0) / seconds if seconds > 0 else 0.0
     return total_tokens / watts if watts > 0 else 0.0
+
+
+def compare_regions(wh: float) -> list[dict]:
+    """Compare energy cost and carbon footprint for a given Wh across all known regions.
+
+    Enables carbon-aware and cost-aware scheduling (FinOps Extension 5).
+    """
+    kwh = wh / 1000.0
+    results = []
+    for reg, carbon_intensity in REGION_CARBON.items():
+        price_kwh = REGION_PRICE_KWH.get(reg, 0.12)
+        cost = kwh * price_kwh
+        carbon = kwh * carbon_intensity
+        results.append({
+            "region": reg,
+            "price_kwh": price_kwh,
+            "carbon_intensity_g_kwh": carbon_intensity,
+            "electricity_cost_usd": round(cost, 4),
+            "carbon_emissions_g": round(carbon, 2),
+        })
+
+    results.sort(key=lambda x: x["electricity_cost_usd"])
+    return results
+
+
+def calculate_workload_energy_carbon(
+    gpu_watts: float,
+    hours: float,
+    num_gpus: int = 1,
+    region: str = "us-east-1",
+) -> dict:
+    """Compute total kWh, energy cost, and carbon emissions for a batch/training workload."""
+    kwh = (gpu_watts * num_gpus * hours) / 1000.0
+    cost = kwh * REGION_PRICE_KWH.get(region, 0.12)
+    carbon_gco2 = kwh * REGION_CARBON.get(region, 380)
+    return {
+        "kwh": round(kwh, 2),
+        "energy_cost_usd": round(cost, 2),
+        "carbon_kg": round(carbon_gco2 / 1000.0, 3),
+    }

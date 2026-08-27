@@ -82,6 +82,18 @@ def cache_is_worth_it(
     return avg_cache_reads >= be_reads
 
 
+# Default estimated spot interruption rates by GPU architecture snapshot
+DEFAULT_INTERRUPT_RATES = {
+    "H100": 0.03,
+    "H200": 0.03,
+    "B200": 0.04,
+    "A100": 0.05,
+    "MI300X": 0.05,
+    "A10G": 0.08,
+    "L4": 0.08,
+}
+
+
 def break_even_utilization(discount_frac: float) -> float:
     """Utilization at which a commitment pays off ~= 1 - discount.
 
@@ -90,20 +102,41 @@ def break_even_utilization(discount_frac: float) -> float:
     return max(0.0, min(1.0, 1.0 - discount_frac))
 
 
-def recommend_tier(hours_per_day: float, interruptible: bool, reserved_discount: float = 0.45) -> str:
-    """Pick a purchasing tier from a workload's duty cycle + interruptibility.
+def recommend_tier(
+    hours_per_day: float,
+    interruptible: bool,
+    reserved_discount: float = 0.45,
+    gpu_type: str | None = None,
+    job_days: int | None = None,
+    interrupt_rate: float | None = None,
+    reserved_1yr_discount: float = 0.25,
+) -> str:
+    """Pick a purchasing tier from a workload's duty cycle, interruptibility, GPU type, and duration.
 
-    DOCUMENTED simple policy (instructor extension point — swap in your own):
-      - interruptible & not 24/7  -> 'spot'      (checkpoint and ride the discount)
-      - duty cycle >= break-even  -> 'reserved'  (steady, high utilization)
-      - otherwise                 -> 'on_demand' (spiky / low duty)
+    Decision Matrix (FinOps Extension 1):
+      - Interruptible & not 24/7 & tolerable spot interruption risk -> 'spot'
+      - High duty cycle (>= break-even) & long duration (>= 30 days) -> 'reserved'
+      - Low duty cycle or short exploratory workload -> 'on_demand'
     """
     duty = max(0.0, hours_per_day) / 24.0
-    be = break_even_utilization(reserved_discount)
+    be_3yr = break_even_utilization(reserved_discount)
+    be_1yr = break_even_utilization(reserved_1yr_discount)
+
+    # If interruptible and not running 24/7 constantly: evaluate spot viability
     if interruptible and hours_per_day < 24:
-        return "spot"
-    if duty >= be:
+        irate = interrupt_rate
+        if irate is None and gpu_type:
+            irate = DEFAULT_INTERRUPT_RATES.get(gpu_type, 0.06)
+        # If interruption rate is below 15% threshold, spot + checkpointing is optimal
+        if irate is None or irate <= 0.15:
+            return "spot"
+
+    # For steady state workloads: check break-even against reserved commitments
+    if duty >= be_3yr:
         return "reserved"
+    if job_days and job_days >= 180 and duty >= be_1yr:
+        return "reserved"
+
     return "on_demand"
 
 
