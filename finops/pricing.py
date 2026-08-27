@@ -52,6 +52,36 @@ def discount_stack(
     return cache_mult * batch_mult
 
 
+def cache_break_even_reads(
+    write_cost_per_m: float,
+    price_in_per_m: float,
+    read_discount: float = 0.10,
+) -> float:
+    """Number of cache reads required before prompt caching breaks even with write cost.
+
+    Formula: break_even_reads = write_cost / (price_in * (1 - read_discount))
+    """
+    savings_per_read_unit = price_in_per_m * (1.0 - read_discount)
+    if savings_per_read_unit <= 0:
+        return float("inf")
+    return write_cost_per_m / savings_per_read_unit
+
+
+def cache_is_worth_it(
+    avg_cache_reads: float,
+    write_cost_per_m: float,
+    read_discount: float = 0.10,
+    price_in_per_m: float = 3.00,
+) -> bool:
+    """True if prompt caching saves money given average read reuse vs write cost.
+
+    Anthropic/Gemini write costs range ~$0.30-$3.75/1M tokens. If reuse is too low,
+    cache write + storage overhead exceeds read discount savings.
+    """
+    be_reads = cache_break_even_reads(write_cost_per_m, price_in_per_m, read_discount)
+    return avg_cache_reads >= be_reads
+
+
 def break_even_utilization(discount_frac: float) -> float:
     """Utilization at which a commitment pays off ~= 1 - discount.
 
